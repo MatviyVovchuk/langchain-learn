@@ -1,41 +1,74 @@
 import os
-
 from dotenv import load_dotenv
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import CharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, OpenAI
-from langchain_community.vectorstores import FAISS
-from langchain.chains.retrieval import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain import hub
+
+# Standard imports from LangChain (though they might show deprecation warnings)
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.llms import OpenAI
+from langchain.vectorstores import FAISS
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
 
 load_dotenv()
 
-if __name__ == "__main__":
-    print("hi")
+def main():
+    # 1. Load the PDF
     pdf_path = "/home/oxit8888/Projects/LangChain/langchain-learn/2210.03629v3.pdf"
-    loader = PyPDFLoader(file_path=pdf_path)
+    loader = PyPDFLoader(pdf_path)
     documents = loader.load()
-    text_splitter = CharacterTextSplitter(
-        chunk_size=1000, chunk_overlap=30, separator="\n"
-    )
-    docs = text_splitter.split_documents(documents=documents)
 
+    # 2. Split the document into smaller chunks
+    text_splitter = CharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=30,
+        separator="\n"
+    )
+    docs = text_splitter.split_documents(documents)
+
+    # 3. Create vector embeddings for search
     embeddings = OpenAIEmbeddings()
+
+    # 4. Initialize (or create) a local FAISS vector index
+    # If an index does not exist yet, build it
     vectorstore = FAISS.from_documents(docs, embeddings)
     vectorstore.save_local("faiss_index_react")
 
-    new_vectorstore = FAISS.load_local(
-        "faiss_index_react", embeddings, allow_dangerous_deserialization=True
+    # Load an existing index (useful for bigger projects)
+    # new_vectorstore = FAISS.load_local(
+    #     "faiss_index_react", embeddings, allow_dangerous_deserialization=True
+    # )
+    # If you already saved the index, uncomment the code above and comment out the line below
+    new_vectorstore = vectorstore
+
+    # 5. Initialize memory for storing conversation history
+    memory = ConversationBufferMemory(
+        memory_key="chat_history",  # the key under which messages are stored
+        return_messages=True        # whether to return the message list
     )
 
-    retrieval_qa_chat_prompt = hub.pull("langchain-ai/retrieval-qa-chat")
-    combine_docs_chain = create_stuff_documents_chain(
-        OpenAI(), retrieval_qa_chat_prompt
-    )
-    retrieval_chain = create_retrieval_chain(
-        new_vectorstore.as_retriever(), combine_docs_chain
+    # 6. Create a ConversationalRetrievalChain
+    #    which can take conversation history into account + search the FAISS index
+    qa_chain = ConversationalRetrievalChain.from_llm(
+        llm=OpenAI(temperature=0),
+        retriever=new_vectorstore.as_retriever(),
+        memory=memory,
+        # you can fine-tune parameters here (e.g., max_tokens, etc.)
     )
 
-    res = retrieval_chain.invoke({"input": "Give me the gist of ReAct in 3 sentences"})
-    print(res["answer"])
+    print("Chat with the PDF document. Type 'exit' to leave the chat.")
+    while True:
+        query = input("\nYou: ")
+        if query.lower().strip() in ["exit", "quit", "bye"]:
+            print("Exiting chat...")
+            break
+
+        # 7. Call the chain with the user's query
+        result = qa_chain({"question": query})
+
+        # 8. Print the response
+        #    'result' includes keys like {"answer": "...", "chat_history": [...], etc.}
+        print(f"Bot: {result['answer']}")
+
+if __name__ == "__main__":
+    main()
